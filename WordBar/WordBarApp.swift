@@ -46,13 +46,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     var currentWordIndex: Int = 0 // 当前单词索引
     var globalMonitor: Any?
+    var isShowingTranslation: Bool = false // 新增状态变量，追踪是否显示中文释义
 
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 创建状态栏按钮
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        updateStatusBarTitle()
+        updateStatusBarTitle() // 初始只显示英文
 
         // 创建菜单
         let menu = NSMenu()
@@ -85,8 +86,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // ⚠️ 使用 addGlobalMonitorForEvents 恢复全局监听功能。
-        // 这将使快捷键在应用非活跃时也可用，但会再次输出对应的字符。
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             // 检查组合键是否包含 Control 和 Option
             if event.modifierFlags.contains(.control) &&
@@ -106,7 +105,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 检查监听器是否创建成功
         if globalMonitor != nil {
             print("✅ 全局监听器创建成功!")
-            print("💡 快捷键 Option + 9 和 Option + 0 已启用")
         } else {
             print("❌ 全局监听器创建失败!")
         }
@@ -116,20 +114,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func updateStatusBarTitle() {
         if let button = statusItem.button {
             let (english, chinese) = words[currentWordIndex]
-            button.title = "\(english) | \(chinese)"
-            print("📝 单词已切换到: \(english) | \(chinese) (索引: \(currentWordIndex))")
+            
+            // 根据 isShowingTranslation 决定显示内容
+            if isShowingTranslation {
+                button.title = "\(english) | \(chinese)"
+                print("📝 单词已切换到: \(english) | \(chinese) (索引: \(currentWordIndex))")
+            } else {
+                button.title = "\(english)"
+                print("📝 单词已切换到: \(english) (索引: \(currentWordIndex))")
+            }
         }
     }
     
-    // 下一个单词
+    // 下一个单词或显示释义
     @objc func nextWord() {
-        currentWordIndex = (currentWordIndex + 1) % words.count
+        if isShowingTranslation {
+            // 如果已显示释义，则前进到下一个单词
+            currentWordIndex = (currentWordIndex + 1) % words.count
+            isShowingTranslation = false // 重置为只显示英文
+        } else {
+            // 如果只显示英文，则切换为显示中英文
+            isShowingTranslation = true
+        }
         updateStatusBarTitle()
     }
 
-    // 上一个单词
+    // 上一个单词，始终退回到英文状态
     @objc func previousWord() {
         currentWordIndex = (currentWordIndex - 1 + words.count) % words.count
+        isShowingTranslation = false // 始终重置为只显示英文
         updateStatusBarTitle()
     }
 
