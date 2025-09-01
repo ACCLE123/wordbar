@@ -8,146 +8,187 @@
 import SwiftUI
 import AppKit
 
-// 检查是否获得了辅助功能权限
+// MARK: - 数据结构
+// Define the Word struct, conforming to Codable for JSON parsing
+struct Word: Codable {
+    var english: String
+    var chinese: String
+}
+
+// MARK: - 辅助功能权限检查
+// Check if accessibility permissions have been granted
 func isTrusted() -> Bool {
     let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue(): false]
     return AXIsProcessTrustedWithOptions(options as CFDictionary)
 }
 
+// MARK: - 应用主入口
 @main
 struct WordBarApp: App {
-    // 创建一个控制器管理状态栏
+    // Create an application delegate to manage the status bar
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // 没有界面，不需要窗口
+        // No window needed for a status bar application
         Settings {
             EmptyView()
         }
     }
 }
 
+// MARK: - 应用代理
 class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem!
+    
+    // An array to hold the words loaded from JSON
+    var words: [Word] = []
 
-    // 单词库
-    let words = [
-        ("vacant", "空的"),
-        ("abandon", "放弃"),
-        ("brilliant", "辉煌的"),
-        ("curious", "好奇的"),
-        ("diligent", "勤奋的"),
-        ("elegant", "优雅的"),
-        ("fabulous", "极好的"),
-        ("grateful", "感激的"),
-        ("hilarious", "搞笑的"),
-        ("intelligent", "聪明的")
-    ]
-
-    var currentWordIndex: Int = 0 // 当前单词索引
+    var currentWordIndex: Int = 0 // The current word index
     var globalMonitor: Any?
-    var isShowingTranslation: Bool = false // 新增状态变量，追踪是否显示中文释义
+    var isShowingTranslation: Bool = false // Tracks if the Chinese translation is being displayed
 
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // 创建状态栏按钮
+        // 1. Load the word data from the JSON file
+        loadWordsFromJSON()
+        
+        // If JSON loading fails, use a fallback word list
+        if words.isEmpty {
+            let backupWords = [
+                ("vacant", "空的")
+            ]
+            words = backupWords.map { Word(english: $0.0, chinese: $0.1) }
+        }
+        
+        // 2. Load the last word index from UserDefaults
+        currentWordIndex = UserDefaults.standard.integer(forKey: "lastWordIndex")
+        // Ensure the loaded index is within the bounds of the word array
+        if currentWordIndex >= words.count {
+            currentWordIndex = 0
+        }
+        
+        // 3. Create the status bar button
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        updateStatusBarTitle() // 初始只显示英文
+        updateStatusBarTitle() // Initial display of the current word
 
-        // 创建菜单
+        // 4. Create the menu
         let menu = NSMenu()
-        // 更新菜单项，添加新的快捷键提示
         menu.addItem(NSMenuItem(title: "下一个单词 (⌃⌥→)", action: #selector(nextWord), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "上一个单词 (⌃⌥←)", action: #selector(previousWord), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(quit), keyEquivalent: "q"))
         statusItem.menu = menu
 
-        // 检查并设置全局快捷键监听器
+        // 5. Check and set up the global hotkey listener
         setupGlobalHotkey()
         
-        print("应用启动完成")
+        print("Application finished launching.")
     }
     
-    // 设置全局快捷键监听器
-    func setupGlobalHotkey() {
-        print("🚀 开始设置全局键盘监听器...")
+    func applicationWillTerminate(_ notification: Notification) {
+        // Save the current word index to UserDefaults before the application terminates
+        UserDefaults.standard.set(currentWordIndex, forKey: "lastWordIndex")
+        print("📝 Application is about to terminate. Last word index \(currentWordIndex) has been saved.")
+    }
+
+    // MARK: - JSON Data Loading
+    func loadWordsFromJSON() {
+        guard let url = Bundle.main.url(forResource: "words", withExtension: "json") else {
+            print("❌ Error: 'words.json' file not found.")
+            return
+        }
         
-        // 检查是否已获得辅助功能权限
+        do {
+            let data = try Data(contentsOf: url)
+            let decodedWords = try JSONDecoder().decode([Word].self, from: data)
+            self.words = decodedWords
+            print("✅ Successfully loaded \(words.count) words from JSON file.")
+        } catch {
+            print("❌ JSON loading or parsing failed: \(error.localizedDescription)")
+        }
+    }
+    
+    // MARK: - Core Functionality
+    
+    // Sets up the global hotkey listener
+    func setupGlobalHotkey() {
+        print("🚀 Setting up global keyboard listener...")
+        
         if !isTrusted() {
-            print("❌ 警告：未获得 '辅助功能' 或 '输入监听' 权限。")
-            print("💡 请前往 '系统设置' -> '隐私与安全性' -> '辅助功能'，为 WordBar 授权。")
-            // 这里可以添加一个简单的弹窗提示用户
+            print("❌ Warning: 'Accessibility' or 'Input Monitoring' permissions not granted.")
             let alert = NSAlert()
-            alert.messageText = "需要权限"
-            alert.informativeText = "为了使全局快捷键生效，请前往“系统设置” -> “隐私与安全性” -> “辅助功能”，为 WordBar 授权。"
+            alert.messageText = "Permission Required"
+            alert.informativeText = "To enable global hotkeys, please go to 'System Settings' -> 'Privacy & Security' -> 'Accessibility' and grant permissions to WordBar."
             alert.runModal()
             return
         }
 
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            // 检查组合键是否包含 Control 和 Option
             if event.modifierFlags.contains(.control) &&
                event.modifierFlags.contains(.option) &&
                !event.modifierFlags.contains(.command) &&
                !event.modifierFlags.contains(.shift) {
                 
-                // 检查按键是否为右箭头或左箭头
-                if event.keyCode == 124 { // 右箭头
+                if event.keyCode == 124 { // Right Arrow
                     self?.nextWord()
-                } else if event.keyCode == 123 { // 左箭头
+                } else if event.keyCode == 123 { // Left Arrow
                     self?.previousWord()
                 }
             }
         }
         
-        // 检查监听器是否创建成功
         if globalMonitor != nil {
-            print("✅ 全局监听器创建成功!")
+            print("✅ Global listener successfully created!")
         } else {
-            print("❌ 全局监听器创建失败!")
+            print("❌ Failed to create global listener!")
         }
     }
 
-    // 更新状态栏标题
+    // Updates the status bar title based on the current word and state
     func updateStatusBarTitle() {
+        guard !words.isEmpty else {
+            statusItem.button?.title = "No Words"
+            return
+        }
+        
         if let button = statusItem.button {
-            let (english, chinese) = words[currentWordIndex]
+            let currentWord = words[currentWordIndex]
             
-            // 根据 isShowingTranslation 决定显示内容
             if isShowingTranslation {
-                button.title = "\(english) | \(chinese)"
-                print("📝 单词已切换到: \(english) | \(chinese) (索引: \(currentWordIndex))")
+                button.title = "\(currentWord.english) | \(currentWord.chinese)"
+                print("📝 Word switched to: \(currentWord.english) | \(currentWord.chinese) (Index: \(currentWordIndex))")
             } else {
-                button.title = "\(english)"
-                print("📝 单词已切换到: \(english) (索引: \(currentWordIndex))")
+                button.title = "\(currentWord.english)"
+                print("📝 Word switched to: \(currentWord.english) (Index: \(currentWordIndex))")
             }
         }
     }
     
-    // 下一个单词或显示释义
+    // Moves to the next word or reveals the translation
     @objc func nextWord() {
+        guard !words.isEmpty else { return }
+        
         if isShowingTranslation {
-            // 如果已显示释义，则前进到下一个单词
             currentWordIndex = (currentWordIndex + 1) % words.count
-            isShowingTranslation = false // 重置为只显示英文
+            isShowingTranslation = false
         } else {
-            // 如果只显示英文，则切换为显示中英文
             isShowingTranslation = true
         }
         updateStatusBarTitle()
     }
 
-    // 上一个单词，始终退回到英文状态
+    // Moves to the previous word, always resetting to the English-only state
     @objc func previousWord() {
+        guard !words.isEmpty else { return }
+        
         currentWordIndex = (currentWordIndex - 1 + words.count) % words.count
-        isShowingTranslation = false // 始终重置为只显示英文
+        isShowingTranslation = false
         updateStatusBarTitle()
     }
 
+    // Quits the application
     @objc func quit() {
-        // 清理全局监听器
         if let monitor = globalMonitor {
             NSEvent.removeMonitor(monitor)
         }
